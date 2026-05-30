@@ -1,0 +1,41 @@
+# Ignore everything
+*
+
+# But keep gitignore itself
+!.gitignore
+
+# Keep README if needed
+!README.md
+
+# Keep all Python files in any directory
+!*.py
+!**/*.py
+
+# Keep configs folder and everything inside it
+!configs/
+!configs/**
+
+# Ignore Python cache
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+
+# Ignore common training outputs / logs / checkpoints
+logs*/
+**/logs*/
+runs/
+outputs/
+checkpoints/
+weights/
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.engine
+
+# Ignore datasets
+datasets/
+data/
+UA_DETRAC/
+imagenet/
