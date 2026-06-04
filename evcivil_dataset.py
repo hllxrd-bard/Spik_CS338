@@ -64,12 +64,22 @@ class EVCivilDetectionDataset(Dataset):
         self.seq_items = self._split_sequences(self.seq_items)
 
         if max_sequences is not None:
-            self.seq_items = self.seq_items[:max_sequences]
+            rng = np.random.RandomState(self.seed)
+            indices = np.arange(len(self.seq_items))
+            rng.shuffle(indices)
+            indices = indices[:max_sequences]
+            indices = sorted(indices)
+            self.seq_items = [self.seq_items[i] for i in indices]
 
         self.samples = self._build_samples()
 
         if max_samples is not None:
-            self.samples = self.samples[:max_samples]
+            rng = np.random.RandomState(self.seed)
+            indices = np.arange(len(self.samples))
+            rng.shuffle(indices)
+            indices = indices[:max_samples]
+            indices = sorted(indices)
+            self.samples = [self.samples[i] for i in indices]
 
         if verbose:
             print(f"[EVCivilDetectionDataset] root={self.root}")

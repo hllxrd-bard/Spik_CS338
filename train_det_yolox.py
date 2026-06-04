@@ -834,11 +834,18 @@ def main(args):
     global_step = 0
     best_val_loss = float("inf")
 
+    start_epoch = 0
+    global_step = 0
+    best_val_loss = float("inf")
+    best_map50 = -1.0
+
     if args.resume:
-        best_map50 = ckpt.get("best_map50", best_map50)
         ckpt = torch.load(args.resume, map_location="cpu")
+
         model.load_state_dict(ckpt["model"])
         optimizer.load_state_dict(ckpt["optimizer"])
+
+        best_map50 = ckpt.get("best_map50", best_map50)
 
         # Override learning rate from command line after loading optimizer state.
         for param_group in optimizer.param_groups:
@@ -865,7 +872,7 @@ def main(args):
     print("Start training")
     start_time = time.time()
 
-    best_map50 = -1.0
+    # best_map50 = -1.0
 
     for epoch in range(start_epoch, args.epochs):
         train_loss, global_step = train_one_epoch(

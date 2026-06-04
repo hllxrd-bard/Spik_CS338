@@ -704,6 +704,83 @@ def compute_ap_metrics(predictions, targets, num_classes, iou_thr=0.5):
     }
 
 
+def parse_score_thresholds(value):
+    """
+    Accept:
+        "0.001,0.01,0.05,0.1,0.2,0.3,0.5"
+        [0.001, 0.01, 0.05, 0.1]
+        (0.001, 0.01, 0.05, 0.1)
+    """
+    if value is None:
+        return [0.001, 0.01, 0.05, 0.1, 0.2, 0.3, 0.5]
+
+    if isinstance(value, str):
+        value = value.strip()
+        if value == "":
+            return []
+        return [float(x.strip()) for x in value.split(",") if x.strip()]
+
+    if isinstance(value, (list, tuple)):
+        return [float(x) for x in value]
+
+    raise TypeError(f"Unsupported metric_score_thrs type: {type(value)}")
+
+
+def filter_predictions_by_score(predictions, score_thr):
+    """
+    Filter already-decoded predictions by confidence score.
+    """
+    filtered = []
+
+    for pred in predictions:
+        scores = pred["scores"]
+        keep = scores >= score_thr
+
+        filtered.append({
+            "boxes": pred["boxes"][keep],
+            "scores": pred["scores"][keep],
+            "labels": pred["labels"][keep],
+        })
+
+    return filtered
+
+
+def compute_threshold_sweep(predictions, targets, num_classes, iou_thr, score_thrs):
+    """
+    Compute detection metrics at multiple confidence thresholds.
+    """
+    sweep = {}
+
+    for thr in score_thrs:
+        preds_thr = filter_predictions_by_score(
+            predictions=predictions,
+            score_thr=thr,
+        )
+
+        metrics_thr = compute_ap_metrics(
+            predictions=preds_thr,
+            targets=targets,
+            num_classes=num_classes,
+            iou_thr=iou_thr,
+        )
+
+        n_images = max(len(targets), 1)
+
+        sweep[str(thr)] = {
+            "map50": metrics_thr["map50"],
+            "precision_micro": metrics_thr["precision_micro"],
+            "recall_micro": metrics_thr["recall_micro"],
+            "f1_micro": metrics_thr["f1_micro"],
+            "num_gt": metrics_thr["num_gt"],
+            "num_pred": metrics_thr["num_pred"],
+            "pred_per_image": metrics_thr["num_pred"] / n_images,
+            "tp": metrics_thr["tp"],
+            "fp": metrics_thr["fp"],
+        }
+
+    return sweep
+
+
 # -----------------------------
 # Model loading
 # -----------------------------
@@ -718,7 +795,7 @@ def build_model(mode, args, image_size):
         )
 
     if mode == "spikformer_yolox":
-        from model_det_yolox import SpikformerYOLOXDetector
+        from model_det_yolox_old import SpikformerYOLOXDetector
 
         return SpikformerYOLOXDetector(
             num_classes=args.num_classes,
@@ -730,7 +807,7 @@ def build_model(mode, args, image_size):
         )
 
     if mode == "vit_yolox":
-        from model_det_vit_yolox import ViTYOLOXDetector
+        from model_det_vit_yolox_old import ViTYOLOXDetector
 
         return ViTYOLOXDetector(
             num_classes=args.num_classes,
@@ -759,6 +836,10 @@ def load_checkpoint(model, ckpt_path, device):
 # -----------------------------
 @torch.no_grad()
 def run_eval(args):
+    if args.score_thrs is not None:
+        score_thrs = [float(x) for x in args.score_thrs.split(",")]
+    else:
+        score_thrs = [args.score_thr]
     device = torch.device(args.device)
     image_size = (args.input_height, args.input_width)
 
@@ -883,8 +964,13 @@ def run_eval(args):
             torch.cuda.reset_peak_memory_stats(device)
             torch.cuda.empty_cache()
 
+        min_score_thr = min(score_thrs)
+
         all_predictions = []
         all_targets = []
+
+        print("Score thresholds:", score_thrs)
+        print("Decode/NMS score threshold:", min_score_thr)
 
         per_image_path = run_dir / "per_image_predictions.jsonl"
         per_image_f = open(per_image_path, "w", encoding="utf-8")
@@ -916,14 +1002,16 @@ def run_eval(args):
                 forward_time_total += forward_time
 
                 post_start = time.time()
+
                 batch_preds = decode_naive_predictions(
                     pred=pred_raw,
                     image_size=image_size,
-                    score_thr=args.score_thr,
+                    score_thr=min_score_thr,
                     nms_thr=args.nms_thr,
                     max_det=args.max_det,
                     num_classes=args.num_classes,
                 )
+
                 functional.reset_net(model)
                 sync_if_cuda(device)
                 post_time = time.time() - post_start
@@ -939,10 +1027,11 @@ def run_eval(args):
                     outputs = outputs[0]
 
                 post_start = time.time()
+
                 batch_preds = decode_yolox_predictions(
                     outputs=outputs,
                     image_size=image_size,
-                    score_thr=args.score_thr,
+                    score_thr=min_score_thr,
                     nms_thr=args.nms_thr,
                     max_det=args.max_det,
                     num_classes=args.num_classes,
@@ -950,12 +1039,14 @@ def run_eval(args):
 
                 if args.mode.startswith("spikformer"):
                     functional.reset_net(model)
+
                 sync_if_cuda(device)
                 post_time = time.time() - post_start
                 postprocess_time_total += post_time
 
             for i in range(len(batch_preds)):
                 pred_i = batch_preds[i]
+
                 tgt_i = {
                     "boxes": targets[i]["boxes"].detach().cpu(),
                     "labels": targets[i]["labels"].detach().cpu(),
@@ -966,9 +1057,12 @@ def run_eval(args):
 
                 global_sample_index = indices[seen]
 
+                # Log predictions decoded at the minimum threshold.
+                log_thr = min_score_thr
                 record = {
                     "eval_id": seen,
                     "dataset_index": global_sample_index,
+                    "score_thr": log_thr,
                     "num_gt": int(tgt_i["boxes"].shape[0]),
                     "num_pred": int(pred_i["boxes"].shape[0]),
                     "gt_boxes": tgt_i["boxes"].tolist(),
@@ -1019,12 +1113,29 @@ def run_eval(args):
 
         runtime_sec = time.time() - start
 
-        detection_metrics = compute_ap_metrics(
-            predictions=all_predictions,
-            targets=all_targets,
-            num_classes=args.num_classes,
-            iou_thr=args.iou_thr,
-        )
+        threshold_metrics = compute_threshold_sweep(
+        predictions=all_predictions,
+        targets=all_targets,
+        num_classes=args.num_classes,
+        iou_thr=args.iou_thr,
+        score_thrs=score_thrs,
+    )
+
+        for thr, det_m in threshold_metrics.items():
+            print(
+                f"thr={float(thr):.4f} | "
+                f"mAP50={det_m['map50']:.4f} | "
+                f"P={det_m['precision_micro']:.4f} | "
+                f"R={det_m['recall_micro']:.4f} | "
+                f"F1={det_m['f1_micro']:.4f} | "
+                f"pred/img={det_m['pred_per_image']:.2f} | "
+                f"TP={det_m['tp']} FP={det_m['fp']}"
+            )
+
+        main_thr = str(score_thrs[0])
+        detection_metrics = threshold_metrics[main_thr]
+
+        
 
         efficiency_metrics = build_efficiency_metrics(
             n_eval=n_eval,
@@ -1061,30 +1172,25 @@ def run_eval(args):
             }
 
         metrics = {
-            "mode": args.mode,
-            "checkpoint": args.checkpoint,
-            "score_thr": args.score_thr,
-            "nms_thr": args.nms_thr,
-            "iou_thr": args.iou_thr,
-            "val_ratio": val_ratio,
-            "seed": args.seed,
-            "n_eval": n_eval,
-            "n_total_val": n_total,
-            "detection": detection_metrics,
-            "efficiency": efficiency_metrics,
-            "snn": {
-                "enabled": snn_metrics_enabled,
-                "firing_rate": firing_metrics,
-                "sops": sops_metrics,
-            },
-            # Backward-compatible top-level fields
-            "map50": detection_metrics["map50"],
-            "precision_micro": detection_metrics["precision_micro"],
-            "recall_micro": detection_metrics["recall_micro"],
-            "f1_micro": detection_metrics["f1_micro"],
-            "n_params": n_params,
-            "runtime_sec": runtime_sec,
-        }
+    "mode": args.mode,
+    "checkpoint": args.checkpoint,
+    "score_thrs": score_thrs,
+    "nms_thr": args.nms_thr,
+    "iou_thr": args.iou_thr,
+    "val_ratio": val_ratio,
+    "seed": args.seed,
+    "n_eval": n_eval,
+    "n_total_val": n_total,
+    "threshold_sweep": threshold_metrics,
+    "efficiency": efficiency_metrics,
+    "snn": {
+        "enabled": snn_metrics_enabled,
+        "firing_rate": firing_metrics,
+        "sops": sops_metrics,
+    },
+    "n_params": n_params,
+    "runtime_sec": runtime_sec,
+}
 
         save_json(metrics, run_dir / "metrics.json")
 
@@ -1106,6 +1212,18 @@ def run_eval(args):
         summary_lines.append(f"num_pred: {detection_metrics['num_pred']}")
         summary_lines.append(f"tp: {detection_metrics['tp']}")
         summary_lines.append(f"fp: {detection_metrics['fp']}")
+        summary_lines.append("")
+        summary_lines.append("[Threshold sweep]")
+        for thr, m in threshold_metrics.items():
+            summary_lines.append(
+                f"thr={thr:>5} | "
+                f"mAP50={m['map50']:.4f} | "
+                f"P={m['precision_micro']:.4f} | "
+                f"R={m['recall_micro']:.4f} | "
+                f"F1={m['f1_micro']:.4f} | "
+                f"pred/img={m['pred_per_image']:.2f} | "
+                f"TP={m['tp']} FP={m['fp']}"
+            )
         summary_lines.append("Per-class:")
         for cls_id, cls_m in detection_metrics["classes"].items():
             name = args.class_names.split(",")[int(cls_id)] if args.class_names else cls_id
@@ -1226,9 +1344,39 @@ def parse_args():
 
     parser.add_argument("--print-freq", type=int, default=20)
 
+
+    parser.add_argument(
+    "--score-thrs",
+    type=str,
+    default=None,
+    help="Comma-separated score thresholds, e.g. 0.001,0.005,0.01,0.05",
+)
+
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
     run_eval(args)
+
+
+# python val_det.py \
+#   --mode spikformer_yolox \
+#   --data-path /AIClub_NAS/WorkingSpace/Personal/chinhnm/HLLXRD/hangdv_minion/dataset \
+#   --checkpoint /AIClub_NAS/WorkingSpace/Personal/chinhnm/HLLXRD/hangdv_minion/spikformer/evcivil/logs_evcivil_det_yolox/spikformer_yolox_T16_256x256_lr0.0001/checkpoint_best_val_loss.pth \
+#   --output-dir logs_eval_evcivil_det \
+#   --device cuda:0 \
+#   --batch-size 8 \
+#   --workers 2 \
+#   --T 16 \
+#   --input-height 256 \
+#   --input-width 256 \
+#   --window-ms 30.0 \
+#   --num-classes 2 \
+#   --class-names crack,spalling \
+#   --val-ratio 1.0 \
+#   --score-thr 0.001 \
+#   --metric-score-thrs 0.001,0.01,0.05,0.1,0.2,0.3,0.5 \
+#   --nms-thr 0.5 \
+#   --iou-thr 0.5 \
+#   --max-det 300
