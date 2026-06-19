@@ -7,11 +7,13 @@
 # Keep README if needed
 !README.md
 
-*.py
 
 # Keep configs folder and everything inside it
 !configs/
 !configs/**
+
+!figs/
+!figs/**
 
 !spikformer/
 !spikformer/**
