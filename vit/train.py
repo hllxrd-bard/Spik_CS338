@@ -5,6 +5,12 @@ import os
 import time
 from pathlib import Path
 
+
+import sys
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 import importlib.util
 
 import torch
@@ -12,12 +18,11 @@ from torch.cuda import amp
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
-from spikingjelly.clock_driven import functional
+
 
 import utils
-from evcivil_dataset_yolox import EVCivilDetectionDataset, detection_collate_yolox_fn
-from model_det_yolox import SpikformerYOLOXDetector
-from detrac_dataset_yolox import DETRACDetectionDataset
+from evcivil_dataset_loader import EVCivilDetectionDataset, detection_collate_yolox_fn
+from model import ViTYOLOXDetector
 
 import json
 
@@ -134,28 +139,6 @@ def parse_args():
     parser.add_argument("--sops-spike-thr", type=float, default=0.0)
     parser.add_argument("--sops-include-prefix", type=str, default="backbone")
     parser.add_argument("--snn-layer-topk", type=int, default=20)
-
-    # Model config
-    parser.add_argument("--model-in-channels", type=int, default=2)
-    parser.add_argument("--model-embed-dims", type=int, default=256)
-    parser.add_argument("--model-num-heads", type=int, default=16)
-    parser.add_argument("--model-depths", type=str, default="2")
-    parser.add_argument("--model-mlp-ratio", type=float, default=4.0)
-    parser.add_argument("--model-drop-path-rate", type=float, default=0.1)
-
-    # Spiking neuron config
-    parser.add_argument(
-        "--neuron-type",
-        type=str,
-        default="lif",
-        choices=["lif", "plif"],
-    )
-    parser.add_argument("--neuron-tau", type=float, default=2.0)
-    parser.add_argument("--neuron-v-threshold", type=float, default=1.0)
-    parser.add_argument("--neuron-attn-v-threshold", type=float, default=0.5)
-    parser.add_argument("--neuron-v-reset", type=str, default="0.0")
-    parser.add_argument("--neuron-detach-reset", action="store_true", default=True)
-    parser.add_argument("--neuron-backend", type=str, default="cupy", choices=["torch", "cupy"])
 
     # Validate config keys before applying.
     # valid_keys = {action.dest for action in parser._actions}
@@ -307,7 +290,7 @@ def train_one_epoch(
             loss.backward()
             optimizer.step()
 
-        functional.reset_net(model)
+
 
         global_step += 1
         batch_size = images.shape[0]
@@ -369,7 +352,7 @@ def evaluate_loss(model, data_loader, device, print_freq):
         if loss_dict is None:
             raise RuntimeError("YOLOXHead returned loss_dict=None in eval. Check yolox/head.py patch.")
 
-        functional.reset_net(model)
+
 
         log_loss_dict(metric_logger, loss_dict)
 
@@ -546,8 +529,8 @@ def evaluate_detection_metrics(
 ):
     model.eval()
 
-    is_snn_model = isinstance(model, SpikformerYOLOXDetector)
-    snn_enabled = is_snn_model and not args.disable_snn_metrics
+    is_snn_model = False
+    snn_enabled = False
 
     spike_monitor = None
     sops_monitor = None
@@ -593,8 +576,7 @@ def evaluate_detection_metrics(
             num_classes=args.num_classes,
         )
 
-        if is_snn_model:
-            functional.reset_net(model)
+
 
         for pred_i, tgt_i in zip(batch_preds, targets):
             all_predictions.append(pred_i)
@@ -746,90 +728,14 @@ def evaluate_detection_metrics(
             writer.add_scalar("val_snn/sops_to_dense_ratio", sops_metrics["sops_to_dense_ratio"], epoch)
 
     return metrics
-
-
-def parse_model_depths(value):
-    """
-    Accept:
-        2
-        "2"
-        "2,2,2"
-        [2, 2, 2]
-        (2, 2, 2)
-    """
-    if isinstance(value, int):
-        return value
-
-    if isinstance(value, (list, tuple)):
-        if len(value) == 1:
-            return int(value[0])
-        if len(value) == 3:
-            return tuple(int(x) for x in value)
-        raise ValueError(f"model_depths must be int or 3 values, got {value}")
-
-    if isinstance(value, str):
-        value = value.strip()
-        if "," not in value:
-            return int(value)
-
-        parts = [int(x.strip()) for x in value.split(",") if x.strip()]
-        if len(parts) != 3:
-            raise ValueError(f"model_depths string must have 3 values, got {value}")
-        return tuple(parts)
-
-    raise TypeError(f"Unsupported model_depths type: {type(value)}")
-
-
-def parse_v_reset(value):
-    """
-    Accept:
-        0.0
-        "0.0"
-        None
-        "none"
-    """
-    if value is None:
-        return None
-
-    if isinstance(value, str):
-        value = value.strip().lower()
-        if value in {"none", "null"}:
-            return None
-        return float(value)
-
-    return float(value)
-
-
-def build_neuron_cfg_from_args(args):
-    return {
-        "type": args.neuron_type,
-        "tau": args.neuron_tau,
-        "v_threshold": args.neuron_v_threshold,
-        "attn_v_threshold": args.neuron_attn_v_threshold,
-        "v_reset": parse_v_reset(args.neuron_v_reset),
-        "detach_reset": args.neuron_detach_reset,
-        "backend": args.neuron_backend,
-    }
-
-
 def main(args):
     device = torch.device(args.device)
     image_size = (args.input_height, args.input_width)
 
-    depth_tag = args.model_depths
-    if isinstance(depth_tag, (list, tuple)):
-        depth_tag = "x".join(str(x) for x in depth_tag)
-
     output_dir = os.path.join(
-        args.output_dir,
-        (
-            f"{args.dataset}_spikformer_{args.neuron_type}_yolox_"
-            f"T{args.T}_win{args.window_ms}ms_"
-            f"{args.input_height}x{args.input_width}_"
-            f"ed{args.model_embed_dims}_d{depth_tag}_"
-            f"lr{args.lr}"
-        ),
-    )
+    args.output_dir,
+    f"{args.dataset}_vit_yolox_T{args.T}_{args.input_height}x{args.input_width}_lr{args.lr}",
+)
     utils.mkdir(output_dir)
 
     writer = SummaryWriter(os.path.join(output_dir, "tb"))
@@ -910,20 +816,16 @@ def main(args):
         collate_fn=detection_collate_yolox_fn,
     )
 
-    print("Creating model")
-    neuron_cfg = build_neuron_cfg_from_args(args)
-
-    print("Neuron config:", neuron_cfg)
-
-    model = SpikformerYOLOXDetector(
+    print("Creating Multiscale ViT-YOLOX model")
+    model = ViTYOLOXDetector(
         num_classes=args.num_classes,
-        in_channels=args.model_in_channels,
-        embed_dims=args.model_embed_dims,
-        num_heads=args.model_num_heads,
-        depths=parse_model_depths(args.model_depths),
-        mlp_ratio=args.model_mlp_ratio,
-        drop_path_rate=args.model_drop_path_rate,
-        neuron_cfg=neuron_cfg,
+        T=args.T,
+        img_size=image_size,
+        embed_dims=getattr(args, "vit_embed_dims", 256),
+        depths=getattr(args, "vit_depths", (1, 1, 1)),
+        num_heads=getattr(args, "vit_heads", 8),
+        mlp_ratio=getattr(args, "vit_mlp_ratio", 4.0),
+        dropout=getattr(args, "vit_dropout", 0.0),
     ).to(device)
 
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)

@@ -3,7 +3,7 @@
 CONFIG = {
     "dataset": "evcivil",
     "data_path": "/workingspace_aiclub/WorkingSpace/Personal/chinhnm/HLLXRD/hangdv_minion/dataset",
-    "output_dir": "./logs_evcivil_det_vit_yolox_new",
+    "output_dir": "./logs_evcivil_det_vit_yolox_new_window60_1",
 
     "device": "cuda:0",
     "epochs": 20,
@@ -13,7 +13,7 @@ CONFIG = {
     "T": 16,
     "input_height": 256,
     "input_width": 256,
-    "window_ms": 30.0,
+    "window_ms": 60.0,
 
     "num_classes": 2,
     "class_names": "crack,spalling",
@@ -31,7 +31,7 @@ CONFIG = {
     "log_every_iters": 50,
     "save_every_iters": 200,
     "keep_last_k_iters": 3,
-    "resume": "",
+    "resume": "/AIClub_NAS/WorkingSpace/Personal/chinhnm/HLLXRD/hangdv_minion/spikformer/evcivil/logs_evcivil_det_vit_yolox_new_window60/evcivil_vit_yolox_T16_256x256_lr0.0001/checkpoint_latest.pth",
 
     "eval_metrics_every": 1,
     "disable_eval_metrics": False,

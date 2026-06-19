@@ -7,32 +7,40 @@
 # Keep README if needed
 !README.md
 
-# Keep all Python files in any directory
-!*.py
-!**/*.py
+
 
 # Keep configs folder and everything inside it
 !configs/
 !configs/**
 
+!spikformer/
+!spikformer/**
+
+
+!spikformer_plif/
+!spikformer_plif/**
+
+
+!vit/
+!vit/**
+
+
+!yolox/
+!yolox/**
 # Ignore Python cache
 __pycache__/
 **/__pycache__/
 *.py[cod]
 *$py.class
 
-# Ignore common training outputs / logs / checkpoints
-logs*/
-**/logs*/
-runs/
-outputs/
-checkpoints/
-weights/
-*.pt
-*.pth
-*.ckpt
-*.onnx
-*.engine
+!evcivil_dataset_loader.py
+
+
+!val_det.py
+
+!utils.py
+
+!evcivil_dataset.py
 
 # Ignore datasets
 datasets/

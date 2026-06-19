@@ -1,7 +1,7 @@
 CONFIG = {
     "dataset": "evcivil",
     "data_path": "/workingspace_aiclub/WorkingSpace/Personal/chinhnm/HLLXRD/hangdv_minion/dataset",
-    "output_dir": "./logs_evcivil_det_yolox_new",
+    "output_dir": "./logs_evcivil_det_yolox_plif_new_1",
 
     "device": "cuda:0",
     "epochs": 20,
@@ -29,7 +29,7 @@ CONFIG = {
     "log_every_iters": 50,
     "save_every_iters": 1000,
     "keep_last_k_iters": 3,
-    "resume": "",
+    "resume": "/AIClub_NAS/WorkingSpace/Personal/chinhnm/HLLXRD/hangdv_minion/spikformer/evcivil/logs_evcivil_det_yolox_plif_new/evcivil_spikformer_plif_yolox_T16_win30.0ms_256x256_ed256_d2_lr0.0001/checkpoint_best_map50.pth",
 
     "eval_metrics_every": 1,
     "disable_eval_metrics": False,
@@ -45,4 +45,22 @@ CONFIG = {
     "sops_spike_thr": 0.0,
     "sops_include_prefix": "backbone",
     "snn_layer_topk": 20,
+
+
+    # Model config
+    "model_in_channels": 2,
+    "model_embed_dims": 256,
+    "model_num_heads": 16,
+    "model_depths": 2,
+    "model_mlp_ratio": 4.0,
+    "model_drop_path_rate": 0.1,
+
+    # Spiking neuron config
+    "neuron_type": "plif",
+    "neuron_tau": 2.0,
+    "neuron_v_threshold": 1.0,
+    "neuron_attn_v_threshold": 0.5,
+    "neuron_v_reset": 0.0,
+    "neuron_detach_reset": True,
+    "neuron_backend": "cupy",      # test PLIF có thể đổi thành "torch" trước
 }

@@ -4,6 +4,11 @@ import datetime
 import os
 import time
 from pathlib import Path
+import sys
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 import importlib.util
 
@@ -15,9 +20,8 @@ from torch.utils.tensorboard import SummaryWriter
 from spikingjelly.clock_driven import functional
 
 import utils
-from evcivil_dataset_yolox import EVCivilDetectionDataset, detection_collate_yolox_fn
-from model_det_yolox import SpikformerYOLOXDetector
-from detrac_dataset_yolox import DETRACDetectionDataset
+from evcivil_dataset_loader import EVCivilDetectionDataset, detection_collate_yolox_fn
+from model import SpikformerYOLOXDetector
 
 import json
 
